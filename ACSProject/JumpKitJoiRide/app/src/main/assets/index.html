@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jetpack Runner Portrait</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            touch-action: none;
+            user-select: none;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 20px;
+            pointer-events: none;
+            text-shadow: 2px 2px #000;
+            z-index: 10;
+        }
+        #gameover {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            color: #ff3333;
+            font-family: monospace;
+            font-size: 32px;
+            text-align: center;
+            display: none;
+            pointer-events: auto; 
+            z-index: 20;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        #gameover-text {
+            pointer-events: none;
+            text-shadow: 3px 3px #000;
+        }
+
+        /* CSS Sprite Dude */
+        #player-sprite {
+            position: absolute;
+            width: 45px;
+            height: 60px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 5;
+            display: block;
+        }
+        .sprite-head {
+            position: absolute;
+            top: 0;
+            left: 12px;
+            width: 20px;
+            height: 20px;
+            background: #ffccaa;
+            border-radius: 50%;
+            border: 2px solid #222;
+        }
+        .sprite-body {
+            position: absolute;
+            top: 19px;
+            left: 10px;
+            width: 24px;
+            height: 24px;
+            background: #00ffcc;
+            border: 2px solid #222;
+            border-radius: 4px;
+        }
+        .sprite-pack {
+            position: absolute;
+            top: 21px;
+            left: 2px;
+            width: 10px;
+            height: 18px;
+            background: #ff6600;
+            border: 2px solid #222;
+            border-radius: 3px;
+        }
+        .sprite-leg {
+            position: absolute;
+            top: 41px;
+            width: 6px;
+            height: 16px;
+            background: #3333ff;
+            border: 2px solid #222;
+            border-radius: 2px;
+        }
+        .sprite-leg.left { left: 11px; transform-origin: top; }
+        .sprite-leg.right { left: 22px; transform-origin: top; }
+
+        .running .sprite-leg.left { animation: runLeft 0.35s infinite alternate ease-in-out; }
+        .running .sprite-leg.right { animation: runRight 0.35s infinite alternate ease-in-out; }
+
+        @keyframes runLeft {
+            0% { transform: rotate(-25deg); }
+            100% { transform: rotate(25deg); }
+        }
+        @keyframes runRight {
+            0% { transform: rotate(25deg); }
+            100% { transform: rotate(-25deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">Score: 0 | Best: 0</div>
+    
+    <div id="gameover">
+        <div id="gameover-text">GAME OVER<br><span style="font-size:16px; color:#fff;">Tap Anywhere to Restart</span></div>
+    </div>
+
+    <div id="player-sprite" class="running">
+        <div class="sprite-pack"></div>
+        <div class="sprite-head"></div>
+        <div class="sprite-body"></div>
+        <div class="sprite-leg left"></div>
+        <div class="sprite-leg right"></div>
+    </div>
+
+    <!-- Local Three.js build -->
+    <script src="three.min.js"></script>
+
+    <script>
+        let scene, camera, renderer;
+        let ground, ceiling;
+        let bullets = [], enemies = [], missiles = [], particles = [];
+        let isTouching = false;
+        let score = 0, bestScore = 0;
+        let gameActive = true;
+        let spawnTimer = 0;
+
+        // Shared Geometries & Materials for Memory Efficiency
+        let bulletGeo, bulletMat;
+        let sparkGeo, sparkMat;
+        let explosionGeo, expMatPink, expMatOrange;
+        let enemyGeo, enemyMat;
+        let missileGeo, missileMat;
+
+        const gravity = -0.008;
+        const scrollSpeed = 0.10;
+        
+        const playerX = -2.2;
+        let playerY = 2;
+        let playerVelocity = 0;
+
+        const uiScore = document.getElementById('ui');
+        const uiGameOver = document.getElementById('gameover');
+        const playerSprite = document.getElementById('player-sprite');
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111122);
+            scene.fog = new THREE.FogExp2(0x111122, 0.02);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 3.5, 11);
+            camera.lookAt(0, 3, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 15, 10);
+            scene.add(dirLight);
+
+            // Initialize Shared Assets
+            bulletGeo = new THREE.SphereGeometry(0.08, 6, 6);
+            bulletMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+
+            sparkGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            sparkMat = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+
+            explosionGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+            expMatPink = new THREE.MeshBasicMaterial({ color: 0xff0055 });
+            expMatOrange = new THREE.MeshBasicMaterial({ color: 0xff3300 });
+
+            enemyGeo = new THREE.BoxGeometry(0.5, 2.0, 0.5);
+            enemyMat = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055 });
+
+            missileGeo = new THREE.ConeGeometry(0.25, 0.8, 6);
+            missileGeo.rotateZ(-Math.PI / 2);
+            missileMat = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xaa1100 });
+
+            const groundGeo = new THREE.BoxGeometry(80, 1, 10);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x333344, roughness: 0.8 });
+            
+            ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.position.set(0, -0.5, 0);
+            scene.add(ground);
+
+            ceiling = new THREE.Mesh(groundGeo, groundMat);
+            ceiling.position.set(0, 6.5, 0);
+            scene.add(ceiling);
+
+            window.addEventListener('pointerdown', onPointerDown, { passive: false });
+            window.addEventListener('pointerup', onPointerUp, { passive: false });
+            
+            uiGameOver.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                if (!gameActive) {
+                    resetGame();
+                }
+            }, { passive: false });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function onPointerDown(e) {
+            e.preventDefault();
+            if (!gameActive) return;
+            isTouching = true;
+        }
+
+        function onPointerUp(e) {
+            e.preventDefault();
+            isTouching = false;
+        }
+
+        function shootBulletsAndRecoil() {
+            playerVelocity += 0.012;
+
+            for (let i = 0; i < 2; i++) {
+                const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+                bullet.position.set(playerX - 0.3, playerY + 0.1, 0);
+                
+                bullet.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.04, 
+                    -0.28 - Math.random() * 0.1, 
+                    0
+                );
+                scene.add(bullet);
+                bullets.push(bullet);
+            }
+
+            for (let i = 0; i < 2; i++) {
+                const spark = new THREE.Mesh(sparkGeo, sparkMat);
+                spark.position.set(playerX - 0.3, playerY, 0);
+                spark.velocity = new THREE.Vector3(
+                    -scrollSpeed - Math.random() * 0.02,
+                    -Math.random() * 0.1 - 0.03,
+                    0
+                );
+                spark.life = 12;
+                scene.add(spark);
+                particles.push(spark);
+            }
+        }
+
+        function createExplosion(pos, isPink) {
+            const mat = isPink ? expMatPink : expMatOrange;
+            for (let i = 0; i < 12; i++) {
+                const p = new THREE.Mesh(explosionGeo, mat);
+                p.position.copy(pos);
+                p.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.25,
+                    (Math.random() - 0.5) * 0.25,
+                    (Math.random() - 0.5) * 0.1
+                );
+                p.life = 18;
+                scene.add(p);
+                particles.push(p);
+            }
+        }
+
+        function spawnEnemy() {
+            const type = Math.random();
+            if (type < 0.6) {
+                const enemy = new THREE.Mesh(enemyGeo, enemyMat);
+                const posY = Math.random() * 4 + 1;
+                enemy.position.set(9.0, posY, 0);
+                scene.add(enemy);
+                enemies.push(enemy);
+            } else {
+                const missile = new THREE.Mesh(missileGeo, missileMat);
+                missile.position.set(9.0, playerY, 0);
+                scene.add(missile);
+                missiles.push(missile);
+            }
+        }
+
+        function updateGame() {
+            if (!gameActive) return;
+
+            score += 0.1;
+            uiScore.innerText = `Score: ${Math.floor(score)} | Best: ${Math.floor(bestScore)}`;
+
+            if (isTouching) {
+                shootBulletsAndRecoil();
+            }
+            playerVelocity += gravity;
+            playerY += playerVelocity;
+
+            if (playerY < 0.0) {
+                playerY = 0.0;
+                playerVelocity = 0;
+            }
+            if (playerY > 6.0) {
+                playerY = 6.0;
+                playerVelocity = 0;
+            }
+
+            updateSpritePosition();
+
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let b = bullets[i];
+                b.position.add(b.velocity);
+
+                let destroyed = false;
+
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    let e = enemies[j];
+                    if (b.position.distanceTo(e.position) < 0.9) {
+                        createExplosion(e.position, true);
+                        scene.remove(e);
+                        enemies.splice(j, 1);
+                        destroyed = true;
+                        score += 15;
+                        break;
+                    }
+                }
+
+                if (!destroyed) {
+                    for (let j = missiles.length - 1; j >= 0; j--) {
+                        let m = missiles[j];
+                        if (b.position.distanceTo(m.position) < 0.8) {
+                            createExplosion(m.position, false);
+                            scene.remove(m);
+                            missiles.splice(j, 1);
+                            destroyed = true;
+                            score += 20;
+                            break;
+                        }
+                    }
+                }
+
+                if (destroyed || b.position.y < 0.05 || b.position.x > 11 || b.position.x < -10) {
+                    scene.remove(b);
+                    bullets.splice(i, 1);
+                }
+            }
+
+            spawnTimer++;
+            let currentSpawnRate = Math.max(65, 130 - Math.floor(score / 20));
+            if (spawnTimer > currentSpawnRate) {
+                spawnEnemy();
+                spawnTimer = 0;
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                e.position.x -= scrollSpeed;
+                e.rotation.z += 0.015;
+
+                if (Math.hypot(playerX - e.position.x, playerY - e.position.y) < 0.75) {
+                    gameOver();
+                }
+
+                if (e.position.x < -8) {
+                    scene.remove(e);
+                    enemies.splice(i, 1);
+                }
+            }
+
+            for (let i = missiles.length - 1; i >= 0; i--) {
+                let m = missiles[i];
+                m.position.x -= (scrollSpeed + 0.02);
+
+                if (m.position.x < 7.5) {
+                    if (m.position.y < playerY) {
+                        m.position.y += 0.014;
+                    } else if (m.position.y > playerY) {
+                        m.position.y -= 0.014;
+                    }
+                }
+
+                if (Math.hypot(playerX - m.position.x, playerY - m.position.y) < 0.7) {
+                    gameOver();
+                }
+
+                if (m.position.x < -8) {
+                    scene.remove(m);
+                    missiles.splice(i, 1);
+                }
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.position.add(p.velocity);
+                p.life--;
+                if (p.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+
+            ground.position.x -= scrollSpeed;
+            ceiling.position.x -= scrollSpeed;
+            if (ground.position.x < -20) {
+                ground.position.x = 0;
+                ceiling.position.x = 0;
+            }
+        }
+
+        function updateSpritePosition() {
+            const vector = new THREE.Vector3(playerX, playerY, 0);
+            vector.project(camera);
+
+            const x = (vector.x *  .5 + .5) * window.innerWidth;
+            const y = (vector.y * -.5 + .5) * window.innerHeight;
+
+            playerSprite.style.left = `${x}px`;
+            playerSprite.style.top = `${y}px`;
+        }
+
+        function gameOver() {
+            gameActive = false;
+            isTouching = false;
+            if (score > bestScore) bestScore = score;
+            uiGameOver.style.display = 'flex';
+            playerSprite.classList.remove('running');
+        }
+
+        function resetGame() {
+            enemies.forEach(e => scene.remove(e));
+            missiles.forEach(m => scene.remove(m));
+            bullets.forEach(b => scene.remove(b));
+            enemies = [];
+            missiles = [];
+            bullets = [];
+
+            score = 0;
+            playerY = 2;
+            playerVelocity = 0;
+            spawnTimer = 0;
+            gameActive = true;
+            uiGameOver.style.display = 'none';
+            playerSprite.classList.add('running');
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateGame();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>
